@@ -3,6 +3,7 @@ import csv
 import json
 import logging
 import time
+import random
 from config import FRESHCHAT_ACCOUNT_URL, FRESHCHAT_API_KEY
 from freshchat_client import FreshchatClient
 from urllib.parse import urlparse
@@ -29,6 +30,9 @@ def process_data():
     users_csv_path = os.path.join(OUTPUT_DIR, USERS_CSV)
     conv_csv_path = os.path.join(OUTPUT_DIR, CONV_CSV)
 
+    # Store all conversation IDs and their corresponding user IDs
+    all_conversations = []
+
     with open(users_csv_path, 'w', newline='') as users_file, \
          open(conv_csv_path, 'w', newline='') as conv_file:
         
@@ -43,7 +47,7 @@ def process_data():
         users = client.fetch_all_users()
         logger.info(f"Total users fetched: {len(users)}")
 
-        # Process each user
+        # First pass: collect all user IDs and conversation IDs
         for user in users:
             user_id = user.get("id")
             if not user_id:
@@ -57,46 +61,58 @@ def process_data():
             try:
                 conversations = client.get_user_conversations(user_id)
                 logger.info(f"User {user_id} has {len(conversations)} conversation(s)")
+                
+                # Store conversation IDs with their user IDs
+                for conv in conversations:
+                    conv_id = conv.get("id") or conv.get("conversation_id")
+                    if conv_id:
+                        all_conversations.append({
+                            "user_id": user_id,
+                            "conversation_id": conv_id,
+                            "conversation": conv
+                        })
+                        conv_writer.writerow({"user_id": user_id, "conversation_id": conv_id})
+                
             except Exception as e:
                 logger.error(f"Error fetching conversations for user {user_id}: {e}")
                 continue
 
-            # Process each conversation
-            for conv in conversations:
-                conv_id = conv.get("id") or conv.get("conversation_id")
-                if not conv_id:
-                    logger.warning(f"Conversation with missing id for user {user_id}")
-                    continue
+    # Shuffle the conversations
+    logger.info(f"Shuffling {len(all_conversations)} conversations...")
+    random.shuffle(all_conversations)
 
-                # Record mapping of user_id and conversation_id
-                conv_writer.writerow({"user_id": user_id, "conversation_id": conv_id})
-                logger.info(f"Fetching messages for conversation: {conv_id}")
+    # Second pass: process conversations in random order
+    for conv_data in all_conversations:
+        conv_id = conv_data["conversation_id"]
+        user_id = conv_data["user_id"]
+        
+        logger.info(f"Fetching messages for conversation: {conv_id} (User: {user_id})")
 
-                try:
-                    messages = client.get_conversation_messages(conv_id)
-                    # Format messages into the desired structure
-                    formatted_messages = client.format_conversation_messages(messages)
-                    
-                    # Prepare the conversation JSON data
-                    conv_data = {
-                        "conversation": conv,
-                        "messages": messages,
-                        "formatted_messages": formatted_messages
-                    }
+        try:
+            messages = client.get_conversation_messages(conv_id)
+            # Format messages into the desired structure
+            formatted_messages = client.format_conversation_messages(messages)
+            
+            # Prepare the conversation JSON data
+            conv_data = {
+                "conversation": conv_data["conversation"],
+                "messages": messages,
+                "formatted_messages": formatted_messages
+            }
 
-                    # Save conversation JSON to file
-                    conv_file_path = os.path.join(OUTPUT_DIR, CONVERSATIONS_DIR, f"conversation_{conv_id}.json")
-                    with open(conv_file_path, 'w') as f:
-                        json.dump(conv_data, f, indent=4)
-                    
-                    logger.info(f"Saved conversation {conv_id} to {conv_file_path}")
+            # Save conversation JSON to file
+            conv_file_path = os.path.join(OUTPUT_DIR, CONVERSATIONS_DIR, f"conversation_{conv_id}.json")
+            with open(conv_file_path, 'w') as f:
+                json.dump(conv_data, f, indent=4)
+            
+            logger.info(f"Saved conversation {conv_id} to {conv_file_path}")
 
-                except Exception as e:
-                    logger.error(f"Error processing conversation {conv_id}: {e}")
-                    continue
+        except Exception as e:
+            logger.error(f"Error processing conversation {conv_id}: {e}")
+            continue
 
-                # Short delay to respect rate limits
-                time.sleep(0.5)
+        # Short delay to respect rate limits
+        time.sleep(0.5)
 
     logger.info("Data processing completed. Files saved locally.")
 
