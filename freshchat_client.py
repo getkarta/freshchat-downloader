@@ -78,8 +78,7 @@ class FreshchatClient:
 
             pagination = data.get("pagination", {})
             total_pages = pagination.get("total_pages", page)
-
-            if page >= total_pages:
+            if (page >= 15) or (page >= total_pages):
                 break
             page += 1
 
